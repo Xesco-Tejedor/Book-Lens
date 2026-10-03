@@ -17,6 +17,8 @@ h1{margin:0 0 4px;font-size:1.8rem}h1 span{color:var(--ac)}
 .drop img{max-width:220px;max-height:260px;border-radius:8px;margin-top:12px}
 button,.btn{background:var(--ac);color:#06241c;border:0;border-radius:8px;padding:10px 16px;font-weight:700;font-size:1rem;cursor:pointer}
 button.sec{background:transparent;color:var(--tx);border:1px solid var(--line)}
+button.sec[aria-pressed=true]{border-color:var(--ac);color:var(--ac)}
+.spine{display:grid;grid-template-columns:56px 1fr;gap:12px;padding:10px 0;border-top:1px solid var(--line)}.spine img{width:56px;border-radius:4px;background:#0d1219}.conf{color:var(--mu);font-size:.8rem}
 button:disabled{opacity:.5;cursor:wait}
 .row{display:flex;gap:8px;flex-wrap:wrap}
 input[type=text]{flex:1;min-width:200px;padding:10px;border-radius:8px;border:1px solid var(--line);background:#0d1219;color:var(--tx);font-size:1rem}
@@ -40,8 +42,12 @@ a{color:var(--ac)}
 <p class="sub">Haz una foto a la portada de un libro y obtén su ficha bibliográfica. Prototipo.</p>
 
 <div class="card">
+  <div class="row" style="margin-bottom:12px" role="group" aria-label="Modo">
+    <button type="button" class="sec" id="m-cover" aria-pressed="true">Portada</button>
+    <button type="button" class="sec" id="m-spines" aria-pressed="false">Lomos de una estantería</button>
+  </div>
   <div class="drop" id="drop" tabindex="0">
-    <strong>Toca para hacer una foto o elegir una imagen de la portada</strong>
+    <strong id="droptxt">Toca para hacer una foto o elegir una imagen de la portada</strong>
     <div class="note">También puedes arrastrarla aquí</div>
     <img id="preview" alt="" hidden>
   </div>
@@ -62,14 +68,26 @@ a{color:var(--ac)}
 </main>
 
 <script>
-// Clave de Gemini restringida a este dominio. Se rellena al publicar.
+// Reconocimiento con Gemini desactivado hasta configurar una de estas dos vías:
+// - GEMINI_PROXY_URL: servidor intermedio que guarda la clave (recomendado, la clave no es pública).
+// - GEMINI_API_KEY: clave propia restringida por dominio y con cuota limitada (visible en el código).
+const GEMINI_PROXY_URL = "";
 const GEMINI_API_KEY = "";
+const AI_ON = !!(GEMINI_PROXY_URL || GEMINI_API_KEY);
 const GEMINI_MODEL = "gemini-3.8-flash";
 
 const $ = id => document.getElementById(id);
 const status = (t, err) => { const s = $("status"); s.textContent = t; s.className = "status" + (err ? " err" : ""); };
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
+let mode = "cover";
+function setMode(m) {
+  mode = m;
+  $("m-cover").setAttribute("aria-pressed", m === "cover"); $("m-spines").setAttribute("aria-pressed", m === "spines");
+  $("droptxt").textContent = m === "cover" ? "Toca para hacer una foto o elegir una imagen de la portada" : "Toca para hacer una foto de la estantería (lomos legibles, bien iluminados)";
+  $("result").innerHTML = ""; status("");
+}
+$("m-cover").onclick = () => setMode("cover"); $("m-spines").onclick = () => setMode("spines");
 const drop = $("drop"), file = $("file");
 drop.addEventListener("click", () => file.click());
 drop.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") file.click(); });
@@ -80,7 +98,7 @@ file.addEventListener("change", () => { if (file.files[0]) handleFile(file.files
 $("form").addEventListener("submit", e => { e.preventDefault(); const q = $("q").value.trim(); if (q) searchText(q); });
 
 // Reduce la imagen para que la subida sea rápida y barata.
-function shrink(f, max = 1280) {
+function shrink(f, max = 1600) {
   return new Promise((res, rej) => {
     const url = URL.createObjectURL(f), img = new Image();
     img.onload = () => {
@@ -102,7 +120,8 @@ async function handleFile(f) {
     status("Preparando la imagen…");
     const dataUrl = await shrink(f);
     $("preview").src = dataUrl; $("preview").hidden = false;
-    if (!GEMINI_API_KEY) { status("El reconocimiento de portadas no está activado todavía. Busca por ISBN o título.", true); return; }
+    if (!AI_ON) { status("El reconocimiento por foto no está activado todavía. Busca por ISBN o título.", true); return; }
+    if (mode === "spines") return await handleSpines(dataUrl.split(",")[1]);
     status("Leyendo la portada con Gemini…");
     const info = await readCover(dataUrl.split(",")[1]);
     if (!info || (!info.title && !info.isbn)) { status("No he podido identificar el libro. Prueba con otra foto o busca por texto.", true); return; }
@@ -112,20 +131,47 @@ async function handleFile(f) {
   } catch (e) { status(e.message || "Error inesperado.", true); }
 }
 
-async function readCover(b64) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+async function askGemini(prompt, b64) {
+  const url = GEMINI_PROXY_URL || `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+  const headers = { "Content-Type": "application/json" };
+  if (!GEMINI_PROXY_URL) headers["x-goog-api-key"] = GEMINI_API_KEY;
   const body = {
-    contents: [{ parts: [
-      { text: "Esta imagen es la portada (o contraportada) de un libro. Extrae el título, el autor y el ISBN si es visible. Responde solo con JSON: {\"title\":string|null,\"author\":string|null,\"isbn\":string|null}. No inventes datos." },
-      { inline_data: { mime_type: "image/jpeg", data: b64 } }
-    ]}],
+    contents: [{ parts: [ { text: prompt }, { inline_data: { mime_type: "image/jpeg", data: b64 } } ] }],
     generationConfig: { responseMimeType: "application/json", temperature: 0 }
   };
-  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY }, body: JSON.stringify(body) });
+  const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
   if (!r.ok) throw new Error(r.status === 429 ? "Límite de uso de Gemini alcanzado. Inténtalo más tarde o busca por texto." : `Gemini respondió con error ${r.status}.`);
   const j = await r.json();
   const t = j?.candidates?.[0]?.content?.parts?.map(p => p.text).join("") || "";
   try { return JSON.parse(t.replace(/^```json|```$/g, "").trim()); } catch { return null; }
+}
+
+function readCover(b64) {
+  return askGemini("Esta imagen es la portada (o contraportada) de un libro. Extrae el título, el autor y el ISBN si es visible. Responde solo con JSON: {\"title\":string|null,\"author\":string|null,\"isbn\":string|null}. No inventes datos.", b64);
+}
+
+// Estantería: lee cada lomo y busca cada libro.
+async function handleSpines(b64) {
+  status("Leyendo los lomos con Gemini…");
+  const list = await askGemini("Esta foto muestra libros en una estantería, vistos por el lomo. Lista cada libro de izquierda a derecha con el título y el autor tal como se leen en el lomo. Si un dato no se lee, usa null; no inventes. Responde solo con JSON: [{\"title\":string|null,\"author\":string|null,\"publisher\":string|null}].", b64);
+  const spines = (Array.isArray(list) ? list : []).filter(x => x && x.title);
+  if (!spines.length) { status("No he podido leer ningún lomo. Prueba con una foto más cercana y con buena luz.", true); return; }
+  const out = [];
+  for (let i = 0; i < spines.length; i++) {
+    const sp = spines[i];
+    status(`Buscando ${i + 1} de ${spines.length}: ${sp.title}…`);
+    let m = [];
+    try { m = await olSearch(sp.title, sp.author); if (!m.length) m = await olSearch([sp.title, sp.author].filter(Boolean).join(" "), null); } catch {}
+    out.push({ spine: sp, match: m[0] || null });
+  }
+  status(`${spines.length} lomo${spines.length > 1 ? "s" : ""} leído${spines.length > 1 ? "s" : ""}. Revisa los resultados: la lectura de lomos puede fallar.`);
+  $("result").innerHTML = `<div class="card"><strong>Libros de la estantería</strong>` + out.map((o, i) => {
+    const m = o.match;
+    return `<div class="spine">${m && m.cover ? `<img src="${esc(m.cover)}" alt="">` : "<div></div>"}<div>
+      <div><strong>${i + 1}. ${esc(m ? m.title : o.spine.title)}</strong></div>
+      <div>${esc(m ? m.authors.join(", ") : (o.spine.author || ""))}</div>
+      <div class="conf">${m ? [esc(m.publisher), esc(m.year), m.isbn ? "ISBN " + esc(m.isbn) : ""].filter(Boolean).join(" · ") + (m.url ? ` · <a href="${esc(m.url)}" target="_blank" rel="noopener">ficha</a>` : "") : "Sin coincidencia en Open Library"}</div>
+      <div class="conf">Lomo: «${esc(o.spine.title)}»${o.spine.author ? " / " + esc(o.spine.author) : ""}</div></div></div>`; }).join("") + `</div>`;
 }
 
 function cleanIsbn(s) { const d = s.replace(/[\s-]/g, ""); return /^(\d{9}[\dXx]|\d{13})$/.test(d) ? d : null; }
