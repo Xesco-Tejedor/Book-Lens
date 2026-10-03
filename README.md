@@ -10,6 +10,8 @@ Prototipo de una sola página (`index.html`), sin instalación ni servidor:
 
 Demo: https://xesco-tejedor.github.io/Book-Lens/
 
-## Clave de Gemini
+## Gemini y la clave
 
-El reconocimiento de portadas necesita una clave de la API de Gemini en la constante `GEMINI_API_KEY` de `index.html`. En una web estática esa clave es visible para cualquiera que abra el código fuente, así que debe ser una clave propia con restricción de sitio web (HTTP referrer) y cuota limitada en Google Cloud. Crea la tuya en https://aistudio.google.com/apikey. Sin clave, la búsqueda por ISBN, título o autor sigue funcionando.
+La clave de Gemini no está en el código público. La página llama a un pequeño servidor intermedio (proxy) que guarda la clave como secreto; su URL va en la constante `GEMINI_PROXY_URL` de `index.html`. Para uso local puedes poner tu propia clave (https://aistudio.google.com/apikey) en `GEMINI_API_KEY`, sin subirla a ningún repositorio. Sin proxy ni clave, la búsqueda por ISBN, título o autor sigue funcionando.
+
+El modo "Lomos" lee varios libros de una foto de estantería y busca cada uno en Open Library. La lectura de lomos puede fallar: revisa siempre los resultados.
