@@ -12,4 +12,4 @@ Demo: https://xesco-tejedor.github.io/Book-Lens/
 
 ## Clave de Gemini
 
-La constante `GEMINI_API_KEY` de `index.html` contiene una clave restringida al dominio `xesco-tejedor.github.io` y con cuota limitada. En una web estática la clave es visible: no uses una clave sin restricciones. Para uso local, crea la tuya en https://aistudio.google.com/apikey.
+El reconocimiento de portadas necesita una clave de la API de Gemini en la constante `GEMINI_API_KEY` de `index.html`. En una web estática esa clave es visible para cualquiera que abra el código fuente, así que debe ser una clave propia con restricción de sitio web (HTTP referrer) y cuota limitada en Google Cloud. Crea la tuya en https://aistudio.google.com/apikey. Sin clave, la búsqueda por ISBN, título o autor sigue funcionando.
