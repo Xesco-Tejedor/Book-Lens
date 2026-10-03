@@ -137,7 +137,7 @@ async function askGemini(prompt, b64) {
   if (!GEMINI_PROXY_URL) headers["x-goog-api-key"] = GEMINI_API_KEY;
   const body = {
     contents: [{ parts: [ { text: prompt }, { inline_data: { mime_type: "image/jpeg", data: b64 } } ] }],
-    generationConfig: { responseMimeType: "application/json", temperature: 0 }
+    generationConfig: { responseMimeType: "application/json", temperature: 0, thinkingConfig: { thinkingLevel: "low" } }
   };
   const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
   if (!r.ok) throw new Error(r.status === 429 ? "Límite de uso de Gemini alcanzado. Inténtalo más tarde o busca por texto." : `Gemini respondió con error ${r.status}.`);
