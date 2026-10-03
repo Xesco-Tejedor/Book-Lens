@@ -71,7 +71,7 @@ a{color:var(--ac)}
 // Reconocimiento con Gemini desactivado hasta configurar una de estas dos vías:
 // - GEMINI_PROXY_URL: servidor intermedio que guarda la clave (recomendado, la clave no es pública).
 // - GEMINI_API_KEY: clave propia restringida por dominio y con cuota limitada (visible en el código).
-const GEMINI_PROXY_URL = "";
+const GEMINI_PROXY_URL = "https://gemini-proxy.francesc-adria-perello.workers.dev/";
 const GEMINI_API_KEY = "";
 const AI_ON = !!(GEMINI_PROXY_URL || GEMINI_API_KEY);
 const GEMINI_MODEL = "gemini-3.8-flash";
