@@ -33,6 +33,8 @@ a{color:var(--ac)}
 .alts{list-style:none;padding:0;margin:0}.alts li{padding:8px 0;border-top:1px solid var(--line)}
 .alts button{all:unset;cursor:pointer;color:var(--ac)}
 .note{color:var(--mu);font-size:.85rem}
+.lib-item{display:flex;gap:8px;justify-content:space-between;align-items:baseline;padding:8px 0;border-top:1px solid var(--line)}
+.lib-item button{background:transparent;color:var(--er);padding:2px 8px;font-size:1rem}
 @media(max-width:520px){.book{grid-template-columns:1fr}}
 </style>
 </head>
@@ -64,6 +66,16 @@ a{color:var(--ac)}
 </div>
 
 <div id="result"></div>
+
+<div class="card" id="lib">
+  <strong id="libtitle">Mi biblioteca</strong>
+  <p class="note">Los libros identificados con foto se guardan aquí, en este navegador, sin duplicados.</p>
+  <div class="row" style="margin-bottom:8px">
+    <button type="button" id="lib-csv">Descargar CSV</button>
+    <button type="button" class="sec" id="lib-clear">Vaciar</button>
+  </div>
+  <div id="liblist"></div>
+</div>
 <p class="note">Datos de <a href="https://openlibrary.org" target="_blank" rel="noopener">Open Library</a> y Google Books. El reconocimiento de la portada usa Gemini: la imagen se envía a Google para analizarla.</p>
 </main>
 
@@ -76,6 +88,39 @@ const GEMINI_API_KEY = "";
 const AI_ON = !!(GEMINI_PROXY_URL || GEMINI_API_KEY);
 const GEMINI_MODEL = "gemini-3.8-flash";
 
+// Biblioteca: libros identificados, guardados en localStorage.
+const LIB_KEY = "booklens.library.v1";
+const libLoad = () => { try { return JSON.parse(localStorage.getItem(LIB_KEY)) || []; } catch { return []; } };
+const libSave = l => { try { localStorage.setItem(LIB_KEY, JSON.stringify(l)); } catch {} };
+const libKey = b => b.isbn ? "i:" + String(b.isbn).replace(/[\s-]/g, "") : "t:" + ((b.title || "") + "|" + (b.authors || []).join(",")).toLowerCase().replace(/\s+/g, " ").trim();
+function libAdd(b, how, conf) {
+  if (!b || !b.title) return false;
+  const l = libLoad(), k = libKey(b);
+  if (l.some(x => x.key === k)) return false;
+  l.push({ key: k, title: b.title, authors: b.authors || [], publisher: b.publisher || "", year: b.year || "", isbn: b.isbn || "",
+    pages: b.pages || "", source: b.source || "", url: b.url || "", how: how || "", conf: conf || "", added: new Date().toISOString() });
+  libSave(l); libRender(); return true;
+}
+function libRender() {
+  const l = libLoad();
+  $("libtitle").textContent = `Mi biblioteca (${l.length})`;
+  $("lib-csv").disabled = !l.length; $("lib-clear").disabled = !l.length;
+  $("liblist").innerHTML = l.length ? l.map((x, i) => `<div class="lib-item"><span><strong>${esc(x.title)}</strong> <span class="note">${esc((x.authors || []).join(", "))}${x.year ? " · " + esc(x.year) : ""}</span></span><button type="button" data-i="${i}" aria-label="Quitar" title="Quitar">×</button></div>`).join("") : '<p class="note">Aún no hay libros.</p>';
+  $("liblist").querySelectorAll("button").forEach(btn => btn.onclick = () => { const l2 = libLoad(); l2.splice(+btn.dataset.i, 1); libSave(l2); libRender(); });
+}
+function libCsv() {
+  const cols = ["titulo","autores","editorial","anio","isbn","paginas","fuente","enlace","identificado_por","fecha_alta"];
+  const q = v => { v = String(v ?? ""); return /[",\n\r;]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  const rows = libLoad().map(x => [x.title, (x.authors || []).join("; "), x.publisher, x.year, x.isbn, x.pages, x.source, x.url, x.how, x.added].map(q).join(","));
+  return "\ufeff" + [cols.join(","), ...rows].join("\r\n") + "\r\n";
+}
+function libDownload() {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([libCsv()], { type: "text/csv;charset=utf-8" }));
+  a.download = "book-lens-biblioteca.csv"; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
 const $ = id => document.getElementById(id);
 const status = (t, err) => { const s = $("status"); s.textContent = t; s.className = "status" + (err ? " err" : ""); };
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -87,6 +132,9 @@ function setMode(m) {
   $("droptxt").textContent = m === "cover" ? "Toca para hacer una foto o elegir una imagen de la portada" : "Toca para hacer una foto de la estantería (lomos legibles, bien iluminados)";
   $("result").innerHTML = ""; status("");
 }
+$("lib-csv").onclick = libDownload;
+$("lib-clear").onclick = () => { if (confirm("¿Vaciar toda la biblioteca?")) { libSave([]); libRender(); } };
+libRender();
 $("m-cover").onclick = () => setMode("cover"); $("m-spines").onclick = () => setMode("spines");
 const drop = $("drop"), file = $("file");
 drop.addEventListener("click", () => file.click());
@@ -127,7 +175,7 @@ async function handleFile(f) {
     if (!info || (!info.title && !info.isbn)) { status("No he podido identificar el libro. Prueba con otra foto o busca por texto.", true); return; }
     $("q").value = info.isbn || [info.title, info.author].filter(Boolean).join(" ");
     status(`Detectado: ${[info.title, info.author].filter(Boolean).join(" · ")}. Buscando datos…`);
-    await lookup(info);
+    await lookup(info, "foto portada");
   } catch (e) { status(e.message || "Error inesperado.", true); }
 }
 
@@ -164,7 +212,9 @@ async function handleSpines(b64) {
     try { m = await olSearch(sp.title, sp.author); if (!m.length) m = await olSearch([sp.title, sp.author].filter(Boolean).join(" "), null); } catch {}
     out.push({ spine: sp, match: m[0] || null });
   }
-  status(`${spines.length} lomo${spines.length > 1 ? "s" : ""} leído${spines.length > 1 ? "s" : ""}. Revisa los resultados: la lectura de lomos puede fallar.`);
+  let added = 0;
+  out.forEach(o => { if (libAdd(o.match || { title: o.spine.title, authors: o.spine.author ? [o.spine.author] : [], publisher: o.spine.publisher }, "foto lomos", o.match ? "con coincidencia" : "solo lomo")) added++; });
+  status(`${spines.length} lomo${spines.length > 1 ? "s" : ""} leído${spines.length > 1 ? "s" : ""}. Revisa los resultados: la lectura de lomos puede fallar. ${added} nuevo${added === 1 ? "" : "s"} en la biblioteca.`);
   $("result").innerHTML = `<div class="card"><strong>Libros de la estantería</strong>` + out.map((o, i) => {
     const m = o.match;
     return `<div class="spine">${m && m.cover ? `<img src="${esc(m.cover)}" alt="">` : "<div></div>"}<div>
@@ -183,7 +233,7 @@ async function searchText(q) {
   catch (e) { status(e.message || "Error de búsqueda.", true); }
 }
 
-async function lookup({ isbn, title, author }) {
+async function lookup({ isbn, title, author }, how) {
   let books = [];
   if (isbn) books = await olIsbn(isbn);
   if (!books.length) books = await olSearch(isbn ? isbn : title, isbn ? null : author);
@@ -191,6 +241,7 @@ async function lookup({ isbn, title, author }) {
   if (!books.length) { status("No se encontraron resultados.", true); return; }
   status(`${books.length} resultado${books.length > 1 ? "s" : ""}.`);
   render(books);
+  if (how && libAdd(books[0], how)) status(`${books.length} resultado${books.length > 1 ? "s" : ""}. Guardado en tu biblioteca.`);
 }
 
 async function olIsbn(isbn) {
