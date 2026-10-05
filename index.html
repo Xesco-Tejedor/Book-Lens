@@ -76,7 +76,7 @@ a{color:var(--ac)}
   </div>
   <div id="liblist"></div>
 </div>
-<p class="note">Datos de <a href="https://openlibrary.org" target="_blank" rel="noopener">Open Library</a> y Google Books. El reconocimiento de la portada usa Gemini: la imagen se envía a Google para analizarla.</p>
+<p class="note">Datos de <a href="https://openlibrary.org" target="_blank" rel="noopener">Open Library</a> y Google Books. El reconocimiento de la portada usa Gemini (o, si está saturado, OpenRouter con un modelo gratuito): la imagen se envía a ese servicio para analizarla.</p>
 </main>
 
 <script>
@@ -179,19 +179,49 @@ async function handleFile(f) {
   } catch (e) { status(e.message || "Error inesperado.", true); }
 }
 
+const sleep = ms => new Promise(z => setTimeout(z, ms));
+async function postRetry(url, body, label, tries) {
+  let r = null;
+  for (let k = 0; k < tries; k++) {
+    try { r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
+    catch { r = { ok: false, status: 0 }; }
+    if (r.ok || ![0, 500, 502, 503, 504].includes(r.status)) break;
+    if (k < tries - 1) { status(`${label} está saturado, reintentando (${k + 2}/${tries})…`); await sleep(1500 * Math.pow(2, k)); }
+  }
+  return r;
+}
 async function askGemini(prompt, b64) {
-  const url = GEMINI_PROXY_URL || `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
-  const headers = { "Content-Type": "application/json" };
-  if (!GEMINI_PROXY_URL) headers["x-goog-api-key"] = GEMINI_API_KEY;
-  const body = {
+  if (!GEMINI_PROXY_URL) {
+    const r0 = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY }, body: JSON.stringify({ contents: [{ parts: [ { text: prompt }, { inline_data: { mime_type: "image/jpeg", data: b64 } } ] }], generationConfig: { responseMimeType: "application/json", temperature: 0 } }) });
+    if (!r0.ok) throw new Error(`Gemini respondió con error ${r0.status}.`);
+    const j0 = await r0.json();
+    try { return JSON.parse((j0?.candidates?.[0]?.content?.parts?.map(p => p.text).join("") || "").replace(/^```json|```$/g, "").trim()); } catch { return null; }
+  }
+  const gBody = {
     contents: [{ parts: [ { text: prompt }, { inline_data: { mime_type: "image/jpeg", data: b64 } } ] }],
     generationConfig: { responseMimeType: "application/json", temperature: 0, thinkingConfig: { thinkingLevel: "low" } }
   };
-  const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
-  if (!r.ok) throw new Error(r.status === 429 ? "Límite de uso de Gemini alcanzado. Inténtalo más tarde o busca por texto." : `Gemini respondió con error ${r.status}.`);
+  const orBody = {
+    contents: [{ role: "user", parts: [ { text: prompt + '\n\nFormato obligatorio: un objeto JSON {"result": <la respuesta pedida>} y nada más, sin Markdown.' }, { inline_data: { mime_type: "image/jpeg", data: b64 } } ] }],
+    generationConfig: { responseMimeType: "application/json", temperature: 0 },
+    freeModel: "google/gemma-4-31b-it:free"
+  };
+  let r = await postRetry(GEMINI_PROXY_URL, gBody, "Gemini", 3);
+  let viaOR = false;
+  if (!r.ok) {
+    const gs = r.status;
+    status("Gemini no responde. Probando OpenRouter (modelo gratuito)…");
+    r = await postRetry(GEMINI_PROXY_URL + "openrouter", orBody, "OpenRouter", 2);
+    viaOR = true;
+    if (!r.ok) throw new Error((gs === 429 || r.status === 429) ? "Límite de uso de la IA gratuita alcanzado. Inténtalo más tarde o busca por texto." : `La IA no responde ahora (Gemini ${gs}, OpenRouter ${r.status}). Inténtalo en un minuto o busca por texto.`);
+  }
   const j = await r.json();
-  const t = j?.candidates?.[0]?.content?.parts?.map(p => p.text).join("") || "";
-  try { return JSON.parse(t.replace(/^```json|```$/g, "").trim()); } catch { return null; }
+  const t = j?.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
+  let out = null;
+  try { out = JSON.parse(t.replace(/^```json|```$/g, "").trim()); } catch { return null; }
+  if (viaOR && out && !Array.isArray(out) && typeof out === "object" && "result" in out) out = out.result;
+  if (viaOR && out && !Array.isArray(out) && typeof out === "object") { const arr = Object.values(out).find(Array.isArray); if (arr && !("title" in out)) out = arr; }
+  return out;
 }
 
 function readCover(b64) {
